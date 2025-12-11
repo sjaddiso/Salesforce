@@ -1,0 +1,105 @@
+@RestResource(urlMapping='/ContentShareWebhook')
+global class ContentShareWebhookProcessor {
+
+    // --- Helper Classes to match the JSON payload structure ---
+
+    private class WebhookPayload {
+        // ... (other fields remain the same)
+        public ContactInfo contact; 
+        // ...
+    }
+
+    private class ContactInfo {
+        public String last_name;
+        public String first_name;
+        public String company;
+        public String email_address;
+        public String externalId;
+    }
+
+    private class AssetInfo {
+        public String id;
+        public Integer page;
+    }
+
+    // --- Main REST Endpoint Method ---
+
+    @HttpPost
+    global static void receiveWebhook() {
+        // Get JSON payload from the request
+        RestRequest req = RestContext.request;
+        String jsonPayload = req.requestBody.toString();
+
+        try {
+            // 1. Deserialize 
+            WebhookPayload data = (WebhookPayload)JSON.deserialize(jsonPayload, WebhookPayload.class);
+            
+            // Ensure the 'contact' object exists in the payload
+            if (data.contact == null) {
+                RestContext.response.statusCode = 400;
+                RestContext.response.responseBody = Blob.valueOf('{"status": "Error", "message": "Payload is missing the required contact object."}');
+                return;
+            }
+
+            // Extract the essential contact information
+            ContactInfo prospect = data.contact;
+            String prospectEmail = prospect.email_address;
+
+            // Simple validation: The email is required for the logic
+            if (String.isBlank(prospectEmail)) {
+                RestContext.response.statusCode = 400;
+                RestContext.response.responseBody = Blob.valueOf('{"status": "Error", "message": "Email address is missing in payload."}');
+                return;
+            }
+
+            // 2. Check for existing Lead or Contact based on email
+            
+            Integer existingCount = [
+                SELECT count() FROM Lead WHERE Email = :prospectEmail LIMIT 1
+            ];
+
+            if (existingCount == 0) {
+                existingCount = [
+                    SELECT count() FROM Contact WHERE Email = :prospectEmail LIMIT 1
+                ];
+            }
+
+            // 3. Conditional Lead Creation
+            if (existingCount == 0) {
+                
+                // --- IMPROVED LEAD INITIALIZATION WITH CONDITIONAL DEFAULTS ---
+                Lead newLead = new Lead(
+                    // Use payload value if NOT blank/null, otherwise use default
+                    FirstName = String.isBlank(prospect.first_name) ? 'Showpad' : prospect.first_name,
+                    LastName = String.isBlank(prospect.last_name) ? 'Lead' : prospect.last_name,
+                    Company = String.isBlank(prospect.company) ? '{Not Provided}' : prospect.company,
+                    
+                    // Email is already validated as non-blank
+                    Email = prospectEmail,
+                    
+                    // Set required static defaults
+                    Status = 'Working - Contacted', 
+                    CurrencyIsoCode = 'USD',
+                    LeadSource = 'Webhook - Content Share'
+                );
+                
+                // Insert the new Lead record
+                insert newLead; 
+
+                // Send success response
+                RestContext.response.statusCode = 201; // Created
+                RestContext.response.responseBody = Blob.valueOf('{"status": "Success", "message": "New Lead created for ' + prospectEmail + ' (ID: ' + newLead.Id + ')."}' );
+                
+            } else {
+                // Send skipped response (record already exists)
+                RestContext.response.statusCode = 200; // OK
+                RestContext.response.responseBody = Blob.valueOf('{"status": "Skipped", "message": "Existing Lead or Contact found for ' + prospectEmail + '. No new record created."}');
+            }
+
+        } catch (Exception e) {
+            // Handle parsing, DML, or any unexpected errors
+            RestContext.response.statusCode = 500;
+            RestContext.response.responseBody = Blob.valueOf('{"status": "Error", "message": "Internal Server Error: ' + e.getMessage() + '"}');
+        }
+    }
+}
