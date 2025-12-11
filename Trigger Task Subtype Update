@@ -1,0 +1,9 @@
+trigger Update_Task_Subtype on Task (before insert) {
+    for (Task t : Trigger.new) {
+        if (t.Subject != null && 
+            (t.Subject.startsWith('{{Keyword1}}') || t.Subject.startsWith('{{Keyword2}}'))) {
+            
+            t.TaskSubtype = '{{Type}}';
+        }
+    }
+}
